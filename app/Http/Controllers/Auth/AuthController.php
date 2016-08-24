@@ -59,9 +59,60 @@ class AuthController extends Controller
             return redirect()->intended('dashboard');
         }
 
-      // Show the page
+        if(getenv('MELLON_NAME_ID')) {
+            if($this->loginMellonUser(getenv('MELLON_NAME_ID'))) {
+                //$redirect = \Session::get('loginRedirect', 'dashboard');
+                $redirect = \Session::get('loginRedirect', '');
+                // Unset the page we were before from the session
+                \Session::forget('loginRedirect');
+
+                // Redirect with success
+                return redirect()->to($redirect)->with('success', trans('auth/message/signin.success'));
+            }
+        }
+        // Show the page
         return View::make('auth.login');
     }
+
+   /** Authenticates a user via mod_auth_mellon SSO
+    *
+    * @param $email
+    * @return bool true    if the username is valid
+    *              false   if the username is invalud
+    */
+   function loginMellonUser($mellon_name_id){
+       $username = preg_replace('/@.*/', '', $mellon_name_id);
+       try {
+           $user = User::where('username', '=', $username)->whereNull('deleted_at')->first();
+           if(!$user) {
+               // Create a local user
+               // Based on: https://github.com/snipe/snipe-it/blob/master/app/Models/Ldap.php#L190
+               LOG::debug("Local user ". $username ." does not exist");
+
+               $user = new User;
+               $user->first_name = getenv('MELLON_FIRST_NAME');
+               $user->last_name = getenv('MELLON_LAST_NAME');
+               $user->username = $username;
+               $user->email = $mellon_name_id;
+               $pass = substr(str_shuffle("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"), 0, 25);
+               $user->password = bcrypt($pass);
+               $user->activated = 1;
+               //$user->ldap_import = 1;
+               $user->notes = 'Imported on first login from Google';
+               if (! $user->save()) {
+                   LOG::debug('Could not create user.'.$user->getErrors());
+                   exit;
+               }
+           }
+           // Log the user in
+           Auth::login($user,false);
+           LOG::info("Login complete as $username");
+           return true;
+       } catch (Exception $e) {
+           LOG::error($e->getMessage());
+           return false;
+       }
+   }
 
 
 
@@ -188,6 +239,10 @@ class AuthController extends Controller
     {
         // Log the user out
         Auth::logout();
+
+        if(getenv('MELLON_NAME_ID')) {
+            return redirect()->route('home')->with('error', 'You must log out of SSO to log out of snipeit.');
+        }
 
         // Redirect to the users page
         return redirect()->route('home')->with('success', 'You have successfully logged out!');
